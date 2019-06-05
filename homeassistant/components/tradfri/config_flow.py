@@ -11,7 +11,6 @@ from homeassistant import config_entries
 from .const import (
     CONF_IMPORT_GROUPS, CONF_IDENTITY, CONF_HOST, CONF_KEY, CONF_GATEWAY_ID)
 
-KEY_HOST = 'host'
 KEY_SECURITY_CODE = 'security_code'
 KEY_IMPORT_GROUPS = 'import_groups'
 
@@ -45,7 +44,7 @@ class FlowHandler(config_entries.ConfigFlow):
         errors = {}
 
         if user_input is not None:
-            host = user_input.get(KEY_HOST, self._host)
+            host = user_input.get(CONF_HOST, self._host)
             try:
                 auth = await authenticate(
                     self.hass, host,
@@ -67,7 +66,7 @@ class FlowHandler(config_entries.ConfigFlow):
         fields = OrderedDict()
 
         if self._host is None:
-            fields[vol.Required(KEY_HOST)] = str
+            fields[vol.Required(CONF_HOST)] = str
 
         fields[vol.Required(KEY_SECURITY_CODE)] = str
 
@@ -77,8 +76,8 @@ class FlowHandler(config_entries.ConfigFlow):
             errors=errors,
         )
 
-    async def async_step_discovery(self, user_input):
-        """Handle discovery."""
+    async def async_step_zeroconf(self, user_input):
+        """Handle zeroconf discovery."""
         for entry in self._async_current_entries():
             if entry.data[CONF_HOST] == user_input['host']:
                 return self.async_abort(
@@ -144,7 +143,7 @@ async def authenticate(hass, host, security_code):
 
     identity = uuid4().hex
 
-    api_factory = APIFactory(host, psk_id=identity, loop=hass.loop)
+    api_factory = APIFactory(host, psk_id=identity)
 
     try:
         with async_timeout.timeout(5):

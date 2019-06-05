@@ -1,9 +1,4 @@
-"""
-Support for Blink Home Camera System.
-
-For more details about this component, please refer to the documentation at
-https://home-assistant.io/components/blink/
-"""
+"""Support for Blink Home Camera System."""
 import logging
 from datetime import timedelta
 import voluptuous as vol
@@ -13,9 +8,7 @@ from homeassistant.helpers import (
 from homeassistant.const import (
     CONF_USERNAME, CONF_PASSWORD, CONF_NAME, CONF_SCAN_INTERVAL,
     CONF_BINARY_SENSORS, CONF_SENSORS, CONF_FILENAME,
-    CONF_MONITORED_CONDITIONS, TEMP_FAHRENHEIT)
-
-REQUIREMENTS = ['blinkpy==0.11.0']
+    CONF_MONITORED_CONDITIONS, CONF_MODE, CONF_OFFSET, TEMP_FAHRENHEIT)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +22,7 @@ DEFAULT_BRAND = 'Blink'
 DEFAULT_ATTRIBUTION = "Data provided by immedia-semi.com"
 SIGNAL_UPDATE_BLINK = "blink_update"
 
-DEFAULT_SCAN_INTERVAL = timedelta(seconds=60)
+DEFAULT_SCAN_INTERVAL = timedelta(seconds=300)
 
 TYPE_CAMERA_ARMED = 'motion_enabled'
 TYPE_MOTION_DETECTED = 'motion_detected'
@@ -48,8 +41,8 @@ BINARY_SENSORS = {
 
 SENSORS = {
     TYPE_TEMPERATURE: ['Temperature', TEMP_FAHRENHEIT, 'mdi:thermometer'],
-    TYPE_BATTERY: ['Battery', '%', 'mdi:battery-80'],
-    TYPE_WIFI_STRENGTH: ['Wifi Signal', 'bars', 'mdi:wifi-strength-2'],
+    TYPE_BATTERY: ['Battery', '', 'mdi:battery-80'],
+    TYPE_WIFI_STRENGTH: ['Wifi Signal', 'dBm', 'mdi:wifi-strength-2'],
 }
 
 BINARY_SENSOR_SCHEMA = vol.Schema({
@@ -82,6 +75,8 @@ CONFIG_SCHEMA = vol.Schema(
             vol.Optional(CONF_BINARY_SENSORS, default={}):
                 BINARY_SENSOR_SCHEMA,
             vol.Optional(CONF_SENSORS, default={}): SENSOR_SCHEMA,
+            vol.Optional(CONF_OFFSET, default=1): int,
+            vol.Optional(CONF_MODE, default=''): cv.string,
         })
     },
     extra=vol.ALLOW_EXTRA)
@@ -94,8 +89,12 @@ def setup(hass, config):
     username = conf[CONF_USERNAME]
     password = conf[CONF_PASSWORD]
     scan_interval = conf[CONF_SCAN_INTERVAL]
+    is_legacy = bool(conf[CONF_MODE] == 'legacy')
+    motion_interval = conf[CONF_OFFSET]
     hass.data[BLINK_DATA] = blinkpy.Blink(username=username,
-                                          password=password)
+                                          password=password,
+                                          motion_interval=motion_interval,
+                                          legacy_subdomain=is_legacy)
     hass.data[BLINK_DATA].refresh_rate = scan_interval.total_seconds()
     hass.data[BLINK_DATA].start()
 

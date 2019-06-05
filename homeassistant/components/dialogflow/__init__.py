@@ -1,9 +1,4 @@
-"""
-Support for Dialogflow webhook.
-
-For more details about this component, please refer to the documentation at
-https://home-assistant.io/components/dialogflow/
-"""
+"""Support for Dialogflow webhook."""
 import logging
 
 import voluptuous as vol
@@ -12,10 +7,11 @@ from aiohttp import web
 from homeassistant.const import CONF_WEBHOOK_ID
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import intent, template, config_entry_flow
-_LOGGER = logging.getLogger(__name__)
 
-DEPENDENCIES = ['webhook']
-DOMAIN = 'dialogflow'
+from .const import DOMAIN
+
+
+_LOGGER = logging.getLogger(__name__)
 
 SOURCE = "Home Assistant Dialogflow"
 
@@ -29,7 +25,7 @@ class DialogFlowError(HomeAssistantError):
 
 
 async def async_setup(hass, config):
-    """Set up Dialogflow component."""
+    """Set up the Dialogflow component."""
     return True
 
 
@@ -45,9 +41,7 @@ async def handle_webhook(hass, webhook_id, request):
 
     except DialogFlowError as err:
         _LOGGER.warning(str(err))
-        return web.json_response(
-            dialogflow_error_response(message, str(err))
-        )
+        return web.json_response(dialogflow_error_response(message, str(err)))
 
     except intent.UnknownIntent as err:
         _LOGGER.warning(str(err))
@@ -85,14 +79,9 @@ async def async_unload_entry(hass, entry):
     hass.components.webhook.async_unregister(entry.data[CONF_WEBHOOK_ID])
     return True
 
-config_entry_flow.register_webhook_flow(
-    DOMAIN,
-    'Dialogflow Webhook',
-    {
-        'dialogflow_url': 'https://dialogflow.com/docs/fulfillment#webhook',
-        'docs_url': 'https://www.home-assistant.io/components/dialogflow/'
-    }
-)
+
+# pylint: disable=invalid-name
+async_remove_entry = config_entry_flow.webhook_async_remove_entry
 
 
 def dialogflow_error_response(message, error):

@@ -8,10 +8,10 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import enum
+import functools
 import logging
 import os
 import pathlib
-import re
 import sys
 import threading
 from time import monotonic
@@ -27,12 +27,12 @@ import attr
 import voluptuous as vol
 
 from homeassistant.const import (
-    ATTR_DOMAIN, ATTR_FRIENDLY_NAME, ATTR_NOW, ATTR_SERVICE,
-    ATTR_SERVICE_DATA, ATTR_SECONDS, EVENT_CALL_SERVICE,
-    EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP,
-    EVENT_HOMEASSISTANT_CLOSE, EVENT_SERVICE_REMOVED,
-    EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED,
-    EVENT_TIME_CHANGED, EVENT_TIMER_OUT_OF_SYNC, MATCH_ALL, __version__)
+    ATTR_DOMAIN, ATTR_FRIENDLY_NAME, ATTR_NOW, ATTR_SERVICE, ATTR_SERVICE_DATA,
+    ATTR_SECONDS, CONF_UNIT_SYSTEM_IMPERIAL, EVENT_CALL_SERVICE,
+    EVENT_CORE_CONFIG_UPDATE, EVENT_HOMEASSISTANT_START,
+    EVENT_HOMEASSISTANT_STOP, EVENT_HOMEASSISTANT_CLOSE, EVENT_SERVICE_REMOVED,
+    EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED, EVENT_TIME_CHANGED,
+    EVENT_TIMER_OUT_OF_SYNC, MATCH_ALL, __version__)
 from homeassistant import loader
 from homeassistant.exceptions import (
     HomeAssistantError, InvalidEntityFormatError, InvalidStateError,
@@ -42,8 +42,9 @@ from homeassistant.util.async_ import (
     fire_coroutine_threadsafe)
 from homeassistant import util
 import homeassistant.util.dt as dt_util
-from homeassistant.util import location
-from homeassistant.util.unit_system import UnitSystem, METRIC_SYSTEM  # NOQA
+from homeassistant.util import location, slugify
+from homeassistant.util.unit_system import (  # NOQA
+    UnitSystem, IMPERIAL_SYSTEM, METRIC_SYSTEM)
 
 # Typing imports that create a circular dependency
 # pylint: disable=using-constant-test
@@ -56,13 +57,18 @@ CALLABLE_T = TypeVar('CALLABLE_T', bound=Callable)
 CALLBACK_TYPE = Callable[[], None]
 # pylint: enable=invalid-name
 
+CORE_STORAGE_KEY = 'core.config'
+CORE_STORAGE_VERSION = 1
+
 DOMAIN = 'homeassistant'
 
 # How long we wait for the result of a service call
 SERVICE_CALL_LIMIT = 10  # seconds
 
-# Pattern for validating entity IDs (format: <domain>.<entity>)
-ENTITY_ID_PATTERN = re.compile(r"^(\w+)\.(\w+)$")
+# Source of core configuration
+SOURCE_DISCOVERED = 'discovered'
+SOURCE_STORAGE = 'storage'
+SOURCE_YAML = 'yaml'
 
 # How long to wait till things that run on startup have to finish.
 TIMEOUT_EVENT_START = 15
@@ -76,8 +82,12 @@ def split_entity_id(entity_id: str) -> List[str]:
 
 
 def valid_entity_id(entity_id: str) -> bool:
-    """Test if an entity ID is a valid format."""
-    return ENTITY_ID_PATTERN.match(entity_id) is not None
+    """Test if an entity ID is a valid format.
+
+    Format: <domain>.<entity> where both are slugs.
+    """
+    return ('.' in entity_id and
+            slugify(entity_id) == entity_id.replace('.', '_', 1))
 
 
 def valid_state(state: str) -> bool:
@@ -143,7 +153,7 @@ class HomeAssistant:
         self.bus = EventBus(self)
         self.services = ServiceRegistry(self)
         self.states = StateMachine(self.bus, self.loop)
-        self.config = Config()  # type: Config
+        self.config = Config(self)  # type: Config
         self.components = loader.Components(self)
         self.helpers = loader.Helpers(self)
         # This is a dictionary that any component can store any data on.
@@ -258,11 +268,16 @@ class HomeAssistant:
         """
         task = None
 
-        if asyncio.iscoroutine(target):
+        # Check for partials to properly determine if coroutine function
+        check_target = target
+        while isinstance(check_target, functools.partial):
+            check_target = check_target.func
+
+        if asyncio.iscoroutine(check_target):
             task = self.loop.create_task(target)  # type: ignore
-        elif is_callback(target):
+        elif is_callback(check_target):
             self.loop.call_soon(target, *args)
-        elif asyncio.iscoroutinefunction(target):
+        elif asyncio.iscoroutinefunction(check_target):
             task = self.loop.create_task(target(*args))
         else:
             task = self.loop.run_in_executor(  # type: ignore
@@ -331,7 +346,7 @@ class HomeAssistant:
     def block_till_done(self) -> None:
         """Block till all pending work is done."""
         run_coroutine_threadsafe(
-            self.async_block_till_done(), loop=self.loop).result()
+            self.async_block_till_done(), self.loop).result()
 
     async def async_block_till_done(self) -> None:
         """Block till all pending work is done."""
@@ -403,6 +418,10 @@ class Context:
         type=str,
         default=None,
     )
+    parent_id = attr.ib(
+        type=Optional[str],
+        default=None
+    )
     id = attr.ib(
         type=str,
         default=attr.Factory(lambda: uuid.uuid4().hex),
@@ -412,6 +431,7 @@ class Context:
         """Return a dictionary representation of the context."""
         return {
             'id': self.id,
+            'parent_id': self.parent_id,
             'user_id': self.user_id,
         }
 
@@ -658,11 +678,14 @@ class State:
                  attributes: Optional[Dict] = None,
                  last_changed: Optional[datetime.datetime] = None,
                  last_updated: Optional[datetime.datetime] = None,
-                 context: Optional[Context] = None) -> None:
+                 context: Optional[Context] = None,
+                 # Temp, because database can still store invalid entity IDs
+                 # Remove with 1.0 or in 2020.
+                 temp_invalid_id_bypass: Optional[bool] = False) -> None:
         """Initialize a new state."""
         state = str(state)
 
-        if not valid_entity_id(entity_id):
+        if not valid_entity_id(entity_id) and not temp_invalid_id_bypass:
             raise InvalidEntityFormatError((
                 "Invalid entity id encountered: {}. "
                 "Format should be <domain>.<object_id>").format(entity_id))
@@ -673,7 +696,7 @@ class State:
                 "State max length is 255 characters.").format(entity_id))
 
         self.entity_id = entity_id.lower()
-        self.state = state
+        self.state = state  # type: str
         self.attributes = MappingProxyType(attributes or {})
         self.last_updated = last_updated or dt_util.utcnow()
         self.last_changed = last_changed or self.last_updated
@@ -735,7 +758,10 @@ class State:
 
         context = json_dict.get('context')
         if context:
-            context = Context(**context)
+            context = Context(
+                id=context.get('id'),
+                user_id=context.get('user_id'),
+            )
 
         return cls(json_dict['entity_id'], json_dict['state'],
                    json_dict.get('attributes'), last_changed, last_updated,
@@ -769,7 +795,7 @@ class StateMachine:
         self._bus = bus
         self._loop = loop
 
-    def entity_ids(self, domain_filter: Optional[str] = None)-> List[str]:
+    def entity_ids(self, domain_filter: Optional[str] = None) -> List[str]:
         """List of entity ids that are being tracked."""
         future = run_callback_threadsafe(
             self._loop, self.async_entity_ids, domain_filter
@@ -791,13 +817,13 @@ class StateMachine:
         return [state.entity_id for state in self._states.values()
                 if state.domain == domain_filter]
 
-    def all(self)-> List[State]:
+    def all(self) -> List[State]:
         """Create a list of all states."""
         return run_callback_threadsafe(  # type: ignore
             self._loop, self.async_all).result()
 
     @callback
-    def async_all(self)-> List[State]:
+    def async_all(self) -> List[State]:
         """Create a list of all states.
 
         This method must be run in the event loop.
@@ -811,8 +837,8 @@ class StateMachine:
         """
         return self._states.get(entity_id.lower())
 
-    def is_state(self, entity_id: str, state: State) -> bool:
-        """Test if entity exists and is specified state.
+    def is_state(self, entity_id: str, state: str) -> bool:
+        """Test if entity exists and is in specified state.
 
         Async friendly.
         """
@@ -890,7 +916,7 @@ class StateMachine:
         else:
             same_state = (old_state.state == new_state and
                           not force_update)
-            same_attr = old_state.attributes == attributes
+            same_attr = old_state.attributes == MappingProxyType(attributes)
             last_changed = old_state.last_changed if same_state else None
 
         if same_state and same_attr:
@@ -919,6 +945,9 @@ class Service:
         """Initialize a service."""
         self.func = func
         self.schema = schema
+        # Properly detect wrapped functions
+        while isinstance(func, functools.partial):
+            func = func.func
         self.is_callback = is_callback(func)
         self.is_coroutinefunction = asyncio.iscoroutinefunction(func)
 
@@ -1108,7 +1137,7 @@ class ServiceRegistry:
             ATTR_DOMAIN: domain.lower(),
             ATTR_SERVICE: service.lower(),
             ATTR_SERVICE_DATA: service_data,
-        })
+        }, context=context)
 
         if not blocking:
             self._hass.async_create_task(
@@ -1148,14 +1177,18 @@ class ServiceRegistry:
 class Config:
     """Configuration settings for Home Assistant."""
 
-    def __init__(self) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         """Initialize a new config object."""
-        self.latitude = None  # type: Optional[float]
-        self.longitude = None  # type: Optional[float]
-        self.elevation = None  # type: Optional[int]
-        self.location_name = None  # type: Optional[str]
-        self.time_zone = None  # type: Optional[datetime.tzinfo]
+        self.hass = hass
+
+        self.latitude = 0  # type: float
+        self.longitude = 0  # type: float
+        self.elevation = 0  # type: int
+        self.location_name = "Home"  # type: str
+        self.time_zone = dt_util.UTC  # type: datetime.tzinfo
         self.units = METRIC_SYSTEM  # type: UnitSystem
+
+        self.config_source = "default"  # type: str
 
         # If True, pip install is skipped for requirements on startup
         self.skip_pip = False  # type: bool
@@ -1163,7 +1196,7 @@ class Config:
         # List of loaded components
         self.components = set()  # type: set
 
-        # API (HTTP) server configuration
+        # API (HTTP) server configuration, see components.http.ApiConfig
         self.api = None  # type: Optional[Any]
 
         # Directory that holds the configuration
@@ -1213,7 +1246,7 @@ class Config:
         return False
 
     def as_dict(self) -> Dict:
-        """Create a dictionary representation of this dict.
+        """Create a dictionary representation of the configuration.
 
         Async friendly.
         """
@@ -1231,8 +1264,84 @@ class Config:
             'components': self.components,
             'config_dir': self.config_dir,
             'whitelist_external_dirs': self.whitelist_external_dirs,
-            'version': __version__
+            'version': __version__,
+            'config_source': self.config_source
         }
+
+    def set_time_zone(self, time_zone_str: str) -> None:
+        """Help to set the time zone."""
+        time_zone = dt_util.get_time_zone(time_zone_str)
+
+        if time_zone:
+            self.time_zone = time_zone
+            dt_util.set_default_time_zone(time_zone)
+        else:
+            raise ValueError(
+                "Received invalid time zone {}".format(time_zone_str))
+
+    @callback
+    def _update(self, *,
+                source: str,
+                latitude: Optional[float] = None,
+                longitude: Optional[float] = None,
+                elevation: Optional[int] = None,
+                unit_system: Optional[str] = None,
+                location_name: Optional[str] = None,
+                time_zone: Optional[str] = None) -> None:
+        """Update the configuration from a dictionary."""
+        self.config_source = source
+        if latitude is not None:
+            self.latitude = latitude
+        if longitude is not None:
+            self.longitude = longitude
+        if elevation is not None:
+            self.elevation = elevation
+        if unit_system is not None:
+            if unit_system == CONF_UNIT_SYSTEM_IMPERIAL:
+                self.units = IMPERIAL_SYSTEM
+            else:
+                self.units = METRIC_SYSTEM
+        if location_name is not None:
+            self.location_name = location_name
+        if time_zone is not None:
+            self.set_time_zone(time_zone)
+
+    async def async_update(self, **kwargs: Any) -> None:
+        """Update the configuration from a dictionary."""
+        self._update(source=SOURCE_STORAGE, **kwargs)
+        await self.async_store()
+        self.hass.bus.async_fire(
+            EVENT_CORE_CONFIG_UPDATE, kwargs
+        )
+
+    async def async_load(self) -> None:
+        """Load [homeassistant] core config."""
+        store = self.hass.helpers.storage.Store(
+            CORE_STORAGE_VERSION, CORE_STORAGE_KEY, private=True)
+        data = await store.async_load()
+        if not data:
+            return
+
+        self._update(source=SOURCE_STORAGE, **data)
+
+    async def async_store(self) -> None:
+        """Store [homeassistant] core config."""
+        time_zone = dt_util.UTC.zone
+        if self.time_zone and getattr(self.time_zone, 'zone'):
+            time_zone = getattr(self.time_zone, 'zone')
+
+        data = {
+            'latitude': self.latitude,
+            'longitude': self.longitude,
+            'elevation': self.elevation,
+            'unit_system': self.units.name,
+            'location_name': self.location_name,
+            'time_zone': time_zone,
+        }
+
+        store = self.hass.helpers.storage.Store(
+            CORE_STORAGE_VERSION, CORE_STORAGE_KEY, private=True)
+        await store.async_save(data)
 
 
 def _async_create_timer(hass: HomeAssistant) -> None:

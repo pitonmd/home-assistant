@@ -1,9 +1,4 @@
-"""
-Support for the Lovelace UI.
-
-For more details about this component, please refer to the documentation
-at https://www.home-assistant.io/lovelace/
-"""
+"""Support for the Lovelace UI."""
 from functools import wraps
 import logging
 import os
@@ -31,6 +26,7 @@ CONFIG_SCHEMA = vol.Schema({
     }),
 }, extra=vol.ALLOW_EXTRA)
 
+EVENT_LOVELACE_UPDATED = 'lovelace_updated'
 
 LOVELACE_CONFIG_FILE = 'ui-lovelace.yaml'
 
@@ -57,7 +53,7 @@ async def async_setup(hass, config):
     # Pass in default to `get` because defaults not set if loaded as dep
     mode = config.get(DOMAIN, {}).get(CONF_MODE, MODE_STORAGE)
 
-    await hass.components.frontend.async_register_built_in_panel(
+    hass.components.frontend.async_register_built_in_panel(
         DOMAIN, config={
             'mode': mode
         })
@@ -75,6 +71,9 @@ async def async_setup(hass, config):
         WS_TYPE_SAVE_CONFIG, websocket_lovelace_save_config,
         SCHEMA_SAVE_CONFIG)
 
+    hass.components.system_health.async_register_info(
+        DOMAIN, system_health_info)
+
     return True
 
 
@@ -85,12 +84,24 @@ class LovelaceStorage:
         """Initialize Lovelace config based on storage helper."""
         self._store = hass.helpers.storage.Store(STORAGE_VERSION, STORAGE_KEY)
         self._data = None
+        self._hass = hass
+
+    async def async_get_info(self):
+        """Return the YAML storage mode."""
+        if self._data is None:
+            await self._load()
+
+        if self._data['config'] is None:
+            return {
+                'mode': 'auto-gen'
+            }
+
+        return _config_info('storage', self._data['config'])
 
     async def async_load(self, force):
         """Load config."""
         if self._data is None:
-            data = await self._store.async_load()
-            self._data = data if data else {'config': None}
+            await self._load()
 
         config = self._data['config']
 
@@ -101,8 +112,17 @@ class LovelaceStorage:
 
     async def async_save(self, config):
         """Save config."""
+        if self._data is None:
+            await self._load()
         self._data['config'] = config
         await self._store.async_save(self._data)
+
+        self._hass.bus.async_fire(EVENT_LOVELACE_UPDATED)
+
+    async def _load(self):
+        """Load the config."""
+        data = await self._store.async_load()
+        self._data = data if data else {'config': None}
 
 
 class LovelaceYAML:
@@ -112,6 +132,19 @@ class LovelaceYAML:
         """Initialize the YAML config."""
         self.hass = hass
         self._cache = None
+
+    async def async_get_info(self):
+        """Return the YAML storage mode."""
+        try:
+            config = await self.async_load(False)
+        except ConfigNotFound:
+            return {
+                'mode': 'yaml',
+                'error': '{} not found'.format(
+                    self.hass.config.path(LOVELACE_CONFIG_FILE))
+            }
+
+        return _config_info('yaml', config)
 
     async def async_load(self, force):
         """Load config."""
@@ -147,18 +180,19 @@ def handle_yaml_errors(func):
         error = None
         try:
             result = await func(hass, connection, msg)
-            message = websocket_api.result_message(
-                msg['id'], result
-            )
         except ConfigNotFound:
             error = 'config_not_found', 'No config found.'
         except HomeAssistantError as err:
             error = 'error', str(err)
 
         if error is not None:
-            message = websocket_api.error_message(msg['id'], *error)
+            connection.send_error(msg['id'], *error)
+            return
 
-        connection.send_message(message)
+        if msg is not None:
+            await connection.send_big_result(msg['id'], result)
+        else:
+            connection.send_result(msg['id'], result)
 
     return send_with_error_handling
 
@@ -175,3 +209,17 @@ async def websocket_lovelace_config(hass, connection, msg):
 async def websocket_lovelace_save_config(hass, connection, msg):
     """Save Lovelace UI configuration."""
     await hass.data[DOMAIN].async_save(msg['config'])
+
+
+async def system_health_info(hass):
+    """Get info for the info page."""
+    return await hass.data[DOMAIN].async_get_info()
+
+
+def _config_info(mode, config):
+    """Generate info about the config."""
+    return {
+        'mode': mode,
+        'resources': len(config.get('resources', [])),
+        'views': len(config.get('views', []))
+    }

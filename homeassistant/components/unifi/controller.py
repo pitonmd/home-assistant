@@ -1,11 +1,11 @@
 """UniFi Controller abstraction."""
-
 import asyncio
+import ssl
 import async_timeout
 
 from aiohttp import CookieJar
 
-from homeassistant import config_entries
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.const import CONF_HOST
 from homeassistant.helpers import aiohttp_client
 
@@ -23,7 +23,6 @@ class UniFiController:
         self.available = True
         self.api = None
         self.progress = None
-        self._cancel_retry_setup = None
 
     @property
     def host(self):
@@ -48,20 +47,7 @@ class UniFiController:
             await self.api.initialize()
 
         except CannotConnect:
-            retry_delay = 2 ** (tries + 1)
-            LOGGER.error("Error connecting to the UniFi controller. Retrying "
-                         "in %d seconds", retry_delay)
-
-            async def retry_setup(_now):
-                """Retry setup."""
-                if await self.async_setup(tries + 1):
-                    # This feels hacky, we should find a better way to do this
-                    self.config_entry.state = config_entries.ENTRY_STATE_LOADED
-
-            self._cancel_retry_setup = hass.helpers.event.async_call_later(
-                retry_delay, retry_setup)
-
-            return False
+            raise ConfigEntryNotReady
 
         except Exception:  # pylint: disable=broad-except
             LOGGER.error(
@@ -81,12 +67,6 @@ class UniFiController:
         Will cancel any scheduled setup retry and will unload
         the config entry.
         """
-        # If we have a retry scheduled, we were never setup.
-        if self._cancel_retry_setup is not None:
-            self._cancel_retry_setup()
-            self._cancel_retry_setup = None
-            return True
-
         # If the authentication was wrong.
         if self.api is None:
             return True
@@ -102,19 +82,23 @@ async def get_controller(
     """Create a controller object and verify authentication."""
     import aiounifi
 
+    sslcontext = None
+
     if verify_ssl:
         session = aiohttp_client.async_get_clientsession(hass)
+        if isinstance(verify_ssl, str):
+            sslcontext = ssl.create_default_context(cafile=verify_ssl)
     else:
         session = aiohttp_client.async_create_clientsession(
             hass, verify_ssl=verify_ssl, cookie_jar=CookieJar(unsafe=True))
 
     controller = aiounifi.Controller(
         host, username=username, password=password, port=port, site=site,
-        websession=session
+        websession=session, sslcontext=sslcontext
     )
 
     try:
-        with async_timeout.timeout(5):
+        with async_timeout.timeout(10):
             await controller.login()
         return controller
 

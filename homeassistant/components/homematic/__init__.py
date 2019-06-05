@@ -1,25 +1,17 @@
-"""
-Support for HomeMatic devices.
-
-For more details about this component, please refer to the documentation at
-https://home-assistant.io/components/homematic/
-"""
-from datetime import timedelta
+"""Support for HomeMatic devices."""
+from datetime import timedelta, datetime
 from functools import partial
 import logging
-import socket
 
 import voluptuous as vol
 
 from homeassistant.const import (
     ATTR_ENTITY_ID, ATTR_NAME, CONF_HOST, CONF_HOSTS, CONF_PASSWORD,
-    CONF_PLATFORM, CONF_USERNAME, CONF_SSL, CONF_VERIFY_SSL,
+    CONF_PLATFORM, CONF_SSL, CONF_USERNAME, CONF_VERIFY_SSL,
     EVENT_HOMEASSISTANT_STOP, STATE_UNKNOWN)
 from homeassistant.helpers import discovery
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity import Entity
-
-REQUIREMENTS = ['pyhomematic==0.1.53']
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,12 +27,14 @@ DISCOVER_BINARY_SENSORS = 'homematic.binary_sensor'
 DISCOVER_COVER = 'homematic.cover'
 DISCOVER_CLIMATE = 'homematic.climate'
 DISCOVER_LOCKS = 'homematic.locks'
+DISCOVER_BATTERY = 'homematic.battery'
 
 ATTR_DISCOVER_DEVICES = 'devices'
 ATTR_PARAM = 'param'
 ATTR_CHANNEL = 'channel'
 ATTR_ADDRESS = 'address'
 ATTR_VALUE = 'value'
+ATTR_VALUE_TYPE = 'value_type'
 ATTR_INTERFACE = 'interface'
 ATTR_ERRORCODE = 'error'
 ATTR_MESSAGE = 'message'
@@ -49,6 +43,10 @@ ATTR_TIME = 'time'
 ATTR_UNIQUE_ID = 'unique_id'
 ATTR_PARAMSET_KEY = 'paramset_key'
 ATTR_PARAMSET = 'paramset'
+ATTR_DISCOVERY_TYPE = 'discovery_type'
+ATTR_LOW_BAT = 'LOW_BAT'
+ATTR_LOWBAT = 'LOWBAT'
+
 
 EVENT_KEYPRESS = 'homematic.keypress'
 EVENT_IMPULSE = 'homematic.impulse'
@@ -65,7 +63,7 @@ HM_DEVICE_TYPES = {
     DISCOVER_SWITCHES: [
         'Switch', 'SwitchPowermeter', 'IOSwitch', 'IPSwitch', 'RFSiren',
         'IPSwitchPowermeter', 'HMWIOSwitch', 'Rain', 'EcoLogic',
-        'IPKeySwitchPowermeter', 'IPGarage'],
+        'IPKeySwitchPowermeter', 'IPGarage', 'IPKeySwitch', 'IPMultiIO'],
     DISCOVER_LIGHTS: ['Dimmer', 'KeyDimmer', 'IPKeyDimmer', 'IPDimmer',
                       'ColorEffectLight'],
     DISCOVER_SENSORS: [
@@ -79,17 +77,18 @@ HM_DEVICE_TYPES = {
         'IPWeatherSensor', 'RotaryHandleSensorIP', 'IPPassageSensor',
         'IPKeySwitchPowermeter', 'IPThermostatWall230V', 'IPWeatherSensorPlus',
         'IPWeatherSensorBasic', 'IPBrightnessSensor', 'IPGarage',
-        'UniversalSensor'],
+        'UniversalSensor', 'MotionIPV2', 'IPMultiIO', 'IPThermostatWall2'],
     DISCOVER_CLIMATE: [
         'Thermostat', 'ThermostatWall', 'MAXThermostat', 'ThermostatWall2',
         'MAXWallThermostat', 'IPThermostat', 'IPThermostatWall',
-        'ThermostatGroup', 'IPThermostatWall230V'],
+        'ThermostatGroup', 'IPThermostatWall230V', 'IPThermostatWall2'],
     DISCOVER_BINARY_SENSORS: [
         'ShutterContact', 'Smoke', 'SmokeV2', 'Motion', 'MotionV2',
         'MotionIP', 'RemoteMotion', 'WeatherSensor', 'TiltSensor',
         'IPShutterContact', 'HMWIOSwitch', 'MaxShutterContact', 'Rain',
         'WiredSensor', 'PresenceIP', 'IPWeatherSensor', 'IPPassageSensor',
-        'SmartwareMotion', 'IPWeatherSensorPlus'],
+        'SmartwareMotion', 'IPWeatherSensorPlus', 'MotionIPV2', 'WaterIP',
+        'IPMultiIO', 'TiltIP', 'IPShutterContactSabotage'],
     DISCOVER_COVER: ['Blind', 'KeyBlind', 'IPKeyBlind', 'IPKeyBlindTilt'],
     DISCOVER_LOCKS: ['KeyMatic']
 }
@@ -102,17 +101,18 @@ HM_IGNORE_DISCOVERY_NODE = [
 HM_IGNORE_DISCOVERY_NODE_EXCEPTIONS = {
     'ACTUAL_TEMPERATURE': [
         'IPAreaThermostat', 'IPWeatherSensor',
-        'IPWeatherSensorPlus', 'IPWeatherSensorBasic'],
+        'IPWeatherSensorPlus', 'IPWeatherSensorBasic',
+        'IPThermostatWall', 'IPThermostatWall2'],
 }
 
 HM_ATTRIBUTE_SUPPORT = {
     'LOWBAT': ['battery', {0: 'High', 1: 'Low'}],
     'LOW_BAT': ['battery', {0: 'High', 1: 'Low'}],
-    'ERROR': ['sabotage', {0: 'No', 1: 'Yes'}],
+    'ERROR': ['error', {0: 'No'}],
     'ERROR_SABOTAGE': ['sabotage', {0: 'No', 1: 'Yes'}],
     'SABOTAGE': ['sabotage', {0: 'No', 1: 'Yes'}],
-    'RSSI_PEER': ['rssi', {}],
-    'RSSI_DEVICE': ['rssi', {}],
+    'RSSI_PEER': ['rssi_peer', {}],
+    'RSSI_DEVICE': ['rssi_device', {}],
     'VALVE_STATE': ['valve', {}],
     'LEVEL': ['level', {}],
     'BATTERY_STATE': ['battery', {}],
@@ -128,7 +128,8 @@ HM_ATTRIBUTE_SUPPORT = {
     'CURRENT': ['current', {}],
     'VOLTAGE': ['voltage', {}],
     'OPERATING_VOLTAGE': ['voltage', {}],
-    'WORKING': ['working', {0: 'No', 1: 'Yes'}]
+    'WORKING': ['working', {0: 'No', 1: 'Yes'}],
+    'STATE_UNCERTAIN': ['state_uncertain', {}]
 }
 
 HM_PRESS_EVENTS = [
@@ -235,6 +236,10 @@ SCHEMA_SERVICE_SET_DEVICE_VALUE = vol.Schema({
     vol.Required(ATTR_CHANNEL): vol.Coerce(int),
     vol.Required(ATTR_PARAM): vol.All(cv.string, vol.Upper),
     vol.Required(ATTR_VALUE): cv.match_all,
+    vol.Optional(ATTR_VALUE_TYPE): vol.In([
+        'boolean', 'dateTime.iso8601',
+        'double', 'int', 'string'
+    ]),
     vol.Optional(ATTR_INTERFACE): cv.string,
 })
 
@@ -267,7 +272,7 @@ def setup(hass, config):
     # Create hosts-dictionary for pyhomematic
     for rname, rconfig in conf[CONF_INTERFACES].items():
         remotes[rname] = {
-            'ip': socket.gethostbyname(rconfig.get(CONF_HOST)),
+            'ip': rconfig.get(CONF_HOST),
             'port': rconfig.get(CONF_PORT),
             'path': rconfig.get(CONF_PATH),
             'resolvenames': rconfig.get(CONF_RESOLVENAMES),
@@ -283,7 +288,7 @@ def setup(hass, config):
 
     for sname, sconfig in conf[CONF_HOSTS].items():
         remotes[sname] = {
-            'ip': socket.gethostbyname(sconfig.get(CONF_HOST)),
+            'ip': sconfig.get(CONF_HOST),
             'port': DEFAULT_PORT,
             'username': sconfig.get(CONF_USERNAME),
             'password': sconfig.get(CONF_PASSWORD),
@@ -379,6 +384,22 @@ def setup(hass, config):
         channel = service.data.get(ATTR_CHANNEL)
         param = service.data.get(ATTR_PARAM)
         value = service.data.get(ATTR_VALUE)
+        value_type = service.data.get(ATTR_VALUE_TYPE)
+
+        # Convert value into correct XML-RPC Type.
+        # https://docs.python.org/3/library/xmlrpc.client.html#xmlrpc.client.ServerProxy
+        if value_type:
+            if value_type == 'int':
+                value = int(value)
+            elif value_type == 'double':
+                value = float(value)
+            elif value_type == 'boolean':
+                value = bool(value)
+            elif value_type == 'dateTime.iso8601':
+                value = datetime.strptime(value, '%Y%m%dT%H:%M:%S')
+            else:
+                # Default is 'string'
+                value = str(value)
 
         # Device not found
         hmdevice = _device_from_servicecall(hass, service)
@@ -465,7 +486,8 @@ def _system_callback_handler(hass, config, src, *args):
                     ('binary_sensor', DISCOVER_BINARY_SENSORS),
                     ('sensor', DISCOVER_SENSORS),
                     ('climate', DISCOVER_CLIMATE),
-                    ('lock', DISCOVER_LOCKS)):
+                    ('lock', DISCOVER_LOCKS),
+                    ('binary_sensor', DISCOVER_BATTERY)):
                 # Get all devices of a specific type
                 found_devices = _get_devices(
                     hass, discovery_type, addresses, interface)
@@ -474,7 +496,8 @@ def _system_callback_handler(hass, config, src, *args):
                 # they are setup in HASS and a discovery event is fired
                 if found_devices:
                     discovery.load_platform(hass, component_name, DOMAIN, {
-                        ATTR_DISCOVER_DEVICES: found_devices
+                        ATTR_DISCOVER_DEVICES: found_devices,
+                        ATTR_DISCOVERY_TYPE: discovery_type,
                     }, config)
 
     # Homegear error message
@@ -497,7 +520,8 @@ def _get_devices(hass, discovery_type, keys, interface):
         metadata = {}
 
         # Class not supported by discovery type
-        if class_name not in HM_DEVICE_TYPES[discovery_type]:
+        if discovery_type != DISCOVER_BATTERY and \
+                class_name not in HM_DEVICE_TYPES[discovery_type]:
             continue
 
         # Load metadata needed to generate a parameter list
@@ -505,6 +529,15 @@ def _get_devices(hass, discovery_type, keys, interface):
             metadata.update(device.SENSORNODE)
         elif discovery_type == DISCOVER_BINARY_SENSORS:
             metadata.update(device.BINARYNODE)
+        elif discovery_type == DISCOVER_BATTERY:
+            if ATTR_LOWBAT in device.ATTRIBUTENODE:
+                metadata.update(
+                    {ATTR_LOWBAT: device.ATTRIBUTENODE[ATTR_LOWBAT]})
+            elif ATTR_LOW_BAT in device.ATTRIBUTENODE:
+                metadata.update(
+                    {ATTR_LOW_BAT: device.ATTRIBUTENODE[ATTR_LOW_BAT]})
+            else:
+                continue
         else:
             metadata.update({None: device.ELEMENT})
 

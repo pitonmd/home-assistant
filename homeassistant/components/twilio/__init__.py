@@ -1,19 +1,10 @@
-"""
-Support for Twilio.
-
-For more details about this component, please refer to the documentation at
-https://home-assistant.io/components/twilio/
-"""
+"""Support for Twilio."""
 import voluptuous as vol
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import CONF_WEBHOOK_ID
 from homeassistant.helpers import config_entry_flow
-
-REQUIREMENTS = ['twilio==6.19.1']
-DEPENDENCIES = ['webhook']
-
-DOMAIN = 'twilio'
+from .const import DOMAIN
 
 CONF_ACCOUNT_SID = 'account_sid'
 CONF_AUTH_TOKEN = 'auth_token'
@@ -65,12 +56,6 @@ async def async_unload_entry(hass, entry):
     hass.components.webhook.async_unregister(entry.data[CONF_WEBHOOK_ID])
     return True
 
-config_entry_flow.register_webhook_flow(
-    DOMAIN,
-    'Twilio Webhook',
-    {
-        'twilio_url':
-            'https://www.twilio.com/docs/glossary/what-is-a-webhook',
-        'docs_url': 'https://www.home-assistant.io/components/twilio/'
-    }
-)
+
+# pylint: disable=invalid-name
+async_remove_entry = config_entry_flow.webhook_async_remove_entry

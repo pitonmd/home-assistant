@@ -1,9 +1,4 @@
-"""
-Support for Mailgun.
-
-For more details about this component, please refer to the documentation at
-https://home-assistant.io/components/mailgun/
-"""
+"""Support for Mailgun."""
 import hashlib
 import hmac
 import json
@@ -15,12 +10,16 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.const import CONF_API_KEY, CONF_DOMAIN, CONF_WEBHOOK_ID
 from homeassistant.helpers import config_entry_flow
 
-DOMAIN = 'mailgun'
+from .const import DOMAIN
+
+
 _LOGGER = logging.getLogger(__name__)
-DEPENDENCIES = ['webhook']
-MESSAGE_RECEIVED = '{}_message_received'.format(DOMAIN)
+
 CONF_SANDBOX = 'sandbox'
+
 DEFAULT_SANDBOX = False
+
+MESSAGE_RECEIVED = '{}_message_received'.format(DOMAIN)
 
 CONFIG_SCHEMA = vol.Schema({
     vol.Optional(DOMAIN): vol.Schema({
@@ -90,11 +89,6 @@ async def async_unload_entry(hass, entry):
     hass.components.webhook.async_unregister(entry.data[CONF_WEBHOOK_ID])
     return True
 
-config_entry_flow.register_webhook_flow(
-    DOMAIN,
-    'Mailgun Webhook',
-    {
-        'mailgun_url': 'https://documentation.mailgun.com/en/latest/user_manual.html#webhooks',  # noqa: E501 pylint: disable=line-too-long
-        'docs_url': 'https://www.home-assistant.io/components/mailgun/'
-    }
-)
+
+# pylint: disable=invalid-name
+async_remove_entry = config_entry_flow.webhook_async_remove_entry

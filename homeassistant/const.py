@@ -1,14 +1,14 @@
 # coding: utf-8
 """Constants used by Home Assistant components."""
 MAJOR_VERSION = 0
-MINOR_VERSION = 85
+MINOR_VERSION = 94
 PATCH_VERSION = '0.dev0'
 __short_version__ = '{}.{}'.format(MAJOR_VERSION, MINOR_VERSION)
 __version__ = '{}.{}'.format(__short_version__, PATCH_VERSION)
 REQUIRED_PYTHON_VER = (3, 5, 3)
 
-# Format for platforms
-PLATFORM_FORMAT = '{}.{}'
+# Format for platform files
+PLATFORM_FORMAT = '{platform}.{domain}'
 
 # Can be used to specify a catch all when registering state or event listeners.
 MATCH_ALL = '*'
@@ -160,29 +160,33 @@ CONF_XY = 'xy'
 CONF_ZONE = 'zone'
 
 # #### EVENTS ####
+EVENT_AUTOMATION_TRIGGERED = 'automation_triggered'
+EVENT_CALL_SERVICE = 'call_service'
+EVENT_COMPONENT_LOADED = 'component_loaded'
+EVENT_CORE_CONFIG_UPDATE = 'core_config_updated'
+EVENT_HOMEASSISTANT_CLOSE = 'homeassistant_close'
 EVENT_HOMEASSISTANT_START = 'homeassistant_start'
 EVENT_HOMEASSISTANT_STOP = 'homeassistant_stop'
-EVENT_HOMEASSISTANT_CLOSE = 'homeassistant_close'
-EVENT_STATE_CHANGED = 'state_changed'
-EVENT_TIME_CHANGED = 'time_changed'
-EVENT_CALL_SERVICE = 'call_service'
+EVENT_LOGBOOK_ENTRY = 'logbook_entry'
 EVENT_PLATFORM_DISCOVERED = 'platform_discovered'
-EVENT_COMPONENT_LOADED = 'component_loaded'
+EVENT_SCRIPT_STARTED = 'script_started'
 EVENT_SERVICE_REGISTERED = 'service_registered'
 EVENT_SERVICE_REMOVED = 'service_removed'
-EVENT_LOGBOOK_ENTRY = 'logbook_entry'
+EVENT_STATE_CHANGED = 'state_changed'
 EVENT_THEMES_UPDATED = 'themes_updated'
 EVENT_TIMER_OUT_OF_SYNC = 'timer_out_of_sync'
-EVENT_AUTOMATION_TRIGGERED = 'automation_triggered'
-EVENT_SCRIPT_STARTED = 'script_started'
+EVENT_TIME_CHANGED = 'time_changed'
+
 
 # #### DEVICE CLASSES ####
 DEVICE_CLASS_BATTERY = 'battery'
 DEVICE_CLASS_HUMIDITY = 'humidity'
 DEVICE_CLASS_ILLUMINANCE = 'illuminance'
+DEVICE_CLASS_SIGNAL_STRENGTH = 'signal_strength'
 DEVICE_CLASS_TEMPERATURE = 'temperature'
 DEVICE_CLASS_TIMESTAMP = 'timestamp'
 DEVICE_CLASS_PRESSURE = 'pressure'
+DEVICE_CLASS_POWER = 'power'
 
 # #### STATES ####
 STATE_ON = 'on'
@@ -239,6 +243,9 @@ ATTR_NAME = 'name'
 
 # Contains one string or a list of strings, each being an entity id
 ATTR_ENTITY_ID = 'entity_id'
+
+# Contains one string or a list of strings, each being an area id
+ATTR_AREA_ID = 'area_id'
 
 # String with a friendly name for the entity
 ATTR_FRIENDLY_NAME = 'friendly_name'
@@ -314,6 +321,13 @@ ATTR_DEVICE_CLASS = 'device_class'
 ATTR_TEMPERATURE = 'temperature'
 
 # #### UNITS OF MEASUREMENT ####
+# Power units
+POWER_WATT = 'W'
+
+# Energy units
+ENERGY_KILO_WATT_HOUR = 'kWh'
+ENERGY_WATT_HOUR = 'Wh'
+
 # Temperature units
 TEMP_CELSIUS = '°C'
 TEMP_FAHRENHEIT = '°F'
@@ -327,6 +341,13 @@ LENGTH_INCHES = 'in'  # type: str
 LENGTH_FEET = 'ft'  # type: str
 LENGTH_YARD = 'yd'  # type: str
 LENGTH_MILES = 'mi'  # type: str
+
+# Pressure units
+PRESSURE_PA = 'Pa'  # type: str
+PRESSURE_HPA = 'hPa'  # type: str
+PRESSURE_MBAR = 'mbar'  # type: str
+PRESSURE_INHG = 'inHg'  # type: str
+PRESSURE_PSI = 'psi'  # type: str
 
 # Volume units
 VOLUME_LITERS = 'L'  # type: str
@@ -440,6 +461,7 @@ UNIT_NOT_RECOGNIZED_TEMPLATE = '{} is not a recognized {} unit.'  # type: str
 
 LENGTH = 'length'  # type: str
 MASS = 'mass'  # type: str
+PRESSURE = 'pressure'  # type: str
 VOLUME = 'volume'  # type: str
 TEMPERATURE = 'temperature'  # type: str
 SPEED_MS = 'speed_ms'  # type: str
