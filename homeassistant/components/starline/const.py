@@ -26,5 +26,6 @@ DATA_SLID_TOKEN = "slid_token"
 DATA_EXPIRES = "expires"
 
 SERVICE_UPDATE_STATE = "update_state"
+SERVICE_UPDATE_OBD = "update_obd"
 SERVICE_SET_SCAN_INTERVAL = "set_scan_interval"
 SERVICE_SET_SCAN_OBD_INTERVAL = "set_scan_obd_interval"
