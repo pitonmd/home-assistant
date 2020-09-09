@@ -16,6 +16,7 @@ from .const import (
     SERVICE_SET_SCAN_INTERVAL,
     SERVICE_SET_SCAN_OBD_INTERVAL,
     SERVICE_UPDATE_STATE,
+    SERVICE_UPDATE_OBD,
 )
 
 
@@ -59,9 +60,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     async def async_update(call=None):
         """Service for update all data."""
         await account.update()
+
+    async def async_update_obd(call=None):
+        """Service for update all data."""
         await account.update_obd()
 
     hass.services.async_register(DOMAIN, SERVICE_UPDATE_STATE, async_update)
+    hass.services.async_register(DOMAIN, SERVICE_UPDATE_OBD, async_update_obd)
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_SCAN_INTERVAL,
